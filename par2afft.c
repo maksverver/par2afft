@@ -452,7 +452,7 @@ static void generate_recovery_data() {
     gf16_t a[1 << 16];
     gf16_t y[1 << 16];
     memset(a, 0, sizeof(a));
-    int last_progress = isatty(stderr) ? -1 : 100;
+    int last_progress = isatty(fileno(stderr)) ? -1 : 100;
     for (int j = 0; j < arg_block_size / sizeof(gf16_t); ++j) {
         // Print progress
         int progress = j * 100 / (arg_block_size / sizeof(gf16_t));
