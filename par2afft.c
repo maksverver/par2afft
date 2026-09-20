@@ -206,7 +206,7 @@ static int parse_option(const char *arg) {
         break;
     }
     fprintf(stderr, "Invalid option argument: %s\n", arg);
-    return 1;
+    return -1;
 }
 
 static void fill_packet_header(
@@ -580,7 +580,15 @@ int parse_arguments(int argc, char *argv[]) {
     // Parse option arguments
     int arg_i = 2;
     while (arg_i < argc && argv[arg_i][0] == '-' && argv[arg_i][1] != '\0') {
-        if (parse_option(argv[arg_i++]) != 0) return -1;
+        if (parse_option(argv[arg_i]) == 0) {
+            ++arg_i;
+        } else {
+            if (argv[arg_i][2] == '\0' && arg_i + 1 < argc) {
+                fprintf(stderr, "Note: no space allowed between option and value. "
+                        "Did you mean: \"%s%s\"?\n", argv[arg_i], argv[arg_i + 1]);
+            }
+            return -1;
+        }
     }
 
     // First positional argument: output file
