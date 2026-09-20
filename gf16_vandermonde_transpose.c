@@ -9,12 +9,12 @@
 #define FIELD_BITS 16
 #define FIELD_ORDER (1 << FIELD_BITS)
 
-#ifndef RECURSIVE_AFFT
-#define RECURSIVE_AFFT 0
+#ifndef ITERATIVE_AFFT
+#define ITERATIVE_AFFT 1
 #endif
 
 #ifndef SUBSPACE_POLY_LUT
-#define SUBSPACE_POLY_LUT 0
+#define SUBSPACE_POLY_LUT 1
 #endif
 
 typedef struct {
@@ -25,7 +25,7 @@ typedef struct {
 static gf16_t beta[FIELD_BITS];
 static gf16_t node[FIELD_ORDER];
 
-#if RECURSIVE_AFFT || GF16_VANDERMONDE_TESTS_INCLUDED
+#if !ITERATIVE_AFFT || GF16_VANDERMONDE_TESTS_INCLUDED
 static subspace_shape_t shape[FIELD_BITS];
 #endif
 
@@ -127,7 +127,7 @@ static void build_cantor_permutation()
 /* Subspace polynomials                                                      */
 /* ------------------------------------------------------------------------- */
 
-#if RECURSIVE_AFFT || GF16_VANDERMONDE_TESTS_INCLUDED
+#if !ITERATIVE_AFFT || GF16_VANDERMONDE_TESTS_INCLUDED
 /*
  * With this Cantor basis, the vanishing polynomial of
  * V_i = span(beta[0],...,beta[i-1]) is
@@ -247,7 +247,7 @@ static void monomial_to_novel_rec(gf16_t *a, unsigned m)
 
 #endif
 
-#if RECURSIVE_AFFT
+#if !ITERATIVE_AFFT
 /*
  * Transpose C^T.
  *
@@ -557,7 +557,7 @@ void gf16_vandermonde_transpose_multiply(const gf16_t a[FIELD_ORDER], gf16_t y[F
 
 void gf16_vandermonde_transpose_init() {
     generate_cantor_basis();
-#if RECURSIVE_AFFT || GF16_VANDERMONDE_TESTS_INCLUDED
+#if !ITERATIVE_AFFT || GF16_VANDERMONDE_TESTS_INCLUDED
     build_subspace_shapes();
 #endif
 #if SUBSPACE_POLY_LUT
