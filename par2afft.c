@@ -672,7 +672,7 @@ int parse_arguments(int argc, char *argv[]) {
         }
         arg_output_blocks = (calculated_block_count * arg_redundancy + 50) / 100;
     } else if (arg_redundancy != -1) {
-        fprintf(stderr, "Cannot set both redundancy (-r) and recovery block count (-b)\n");
+        fprintf(stderr, "Cannot set both redundancy (-r) and recovery block count (-c)\n");
         return -1;
     } else if (arg_output_blocks < 0 || arg_output_blocks > MAX_BLOCK_COUNT) {
         fprintf(stderr, "Invalid recovery block count: %lld\n", arg_input_blocks);
