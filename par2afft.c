@@ -371,11 +371,14 @@ static int open_input_file(const char *filename) {
         fprintf(stderr, "Warning: %s is an empty file!\n", filename);
     }
 
-    void *addr = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (addr == MAP_FAILED) {
-        fprintf(stderr, "Could not mmap input file (%s): %s\n", filename, strerror(errno));
-        close(fd);
-        return -1;
+    void *addr = NULL;
+    if (size > 0) {
+        addr = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (addr == MAP_FAILED) {
+            fprintf(stderr, "Could not mmap input file (%s): %s\n", filename, strerror(errno));
+            close(fd);
+            return -1;
+        }
     }
     char *name = strdup(filename);
     if (name == NULL) {
