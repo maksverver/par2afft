@@ -324,7 +324,7 @@ static void create_main_packet() {
             (size_t) input_file_count * MD5_DIGEST_LENGTH;
     MD5_CTX md5_ctx;
     MD5_Init(&md5_ctx);
-    MD5_Update(&md5_ctx, &main_packet, body_length);
+    MD5_Update(&md5_ctx, &main_packet.body, body_length);
     MD5_Final(recovery_set_id, &md5_ctx);
 
     // Now we can use it to fill in the header
