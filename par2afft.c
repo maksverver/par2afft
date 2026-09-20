@@ -671,6 +671,8 @@ int parse_arguments(int argc, char *argv[]) {
             return -1;
         }
         arg_output_blocks = (calculated_block_count * arg_redundancy + 50) / 100;
+        // Ensure at least 1 output block when redundancy > 0%; this is what other PAR tools do.
+        if (arg_redundancy > 0 && arg_output_blocks == 0) arg_output_blocks = 1;
     } else if (arg_redundancy != -1) {
         fprintf(stderr, "Cannot set both redundancy (-r) and recovery block count (-c)\n");
         return -1;
