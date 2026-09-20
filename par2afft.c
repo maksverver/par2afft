@@ -629,6 +629,7 @@ int parse_arguments(int argc, char *argv[]) {
         }
     } else if (arg_block_size != -1) {
         fprintf(stderr, "Cannot set both block size (-s) and block count (-b)\n");
+        return -1;
     } else if (arg_input_blocks < 1 || arg_input_blocks > MAX_BLOCK_COUNT) {
         fprintf(stderr, "Invalid input block count: %lld\n", arg_input_blocks);
         return -1;
