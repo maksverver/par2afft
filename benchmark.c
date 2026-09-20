@@ -15,7 +15,7 @@ int main() {
     // I use this property below to randomly fill the buffer.
     assert(sizeof(uint64_t) % sizeof(gf16_t) == 0);
 
-    int niter = 1000;
+    int niter = 5000;
     printf("Running benchmark (%d iterations)...\n", niter);
     clock_t clock_begin = clock();
     uint64_t input_bytes = 0;
@@ -41,7 +41,8 @@ int main() {
     printf("Time elapsed: %.6f s\n", time_elapsed);
     printf("Throughput: %.3f MiB/s\n", (double) input_bytes / (1 << 20) / time_elapsed);
     printf("Checksum: %" PRIx64 "\n", checksum);
-    const uint64_t expected_checksum = 0x1f4047e81cf;
+    // const uint64_t expected_checksum = 0x1f4047e81cf;  // for niter == 1000
+    const uint64_t expected_checksum = 0x9c3e5d8b098;
     if (checksum != expected_checksum) {
         fprintf(stderr, "WARNING! Checksum does not match expected value: %"PRIx64"\n", expected_checksum);
         return 1;
