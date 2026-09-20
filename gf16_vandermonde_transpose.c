@@ -9,6 +9,15 @@
 #define FIELD_BITS 16
 #define FIELD_ORDER (1 << FIELD_BITS)
 
+typedef struct {
+    unsigned count;
+    uint32_t exponent[FIELD_BITS];
+} subspace_shape_t;
+
+static gf16_t beta[FIELD_BITS];
+static gf16_t node[FIELD_ORDER];
+static subspace_shape_t shape[FIELD_BITS];
+
 /*
  * Full-field transpose Vandermonde example over
  *
@@ -67,7 +76,7 @@ static gf16_t gf16_trace(gf16_t a)
  * repeatedly apply A downward.  We choose the numerically smallest trace-one
  * element so the result is deterministic and reproducible.
  */
-static void generate_cantor_basis(gf16_t beta[FIELD_BITS])
+static void generate_cantor_basis()
 {
     gf16_t top = 0;
 
@@ -90,8 +99,7 @@ static void generate_cantor_basis(gf16_t beta[FIELD_BITS])
         assert((gf16_sqr(beta[i]) ^ beta[i]) == beta[i - 1]);
 }
 
-static void build_cantor_permutation(gf16_t node[FIELD_ORDER],
-                                     const gf16_t beta[FIELD_BITS])
+static void build_cantor_permutation()
 {
     node[0] = 0;
     for (uint32_t j = 1; j < FIELD_ORDER; ++j) {
@@ -119,12 +127,8 @@ static void build_cantor_permutation(gf16_t node[FIELD_ORDER],
  * Thus s_i is sparse.  We only need its lower exponents, excluding its
  * leading X^(2^i) term.
  */
-typedef struct {
-    unsigned count;
-    uint32_t exponent[FIELD_BITS];
-} subspace_shape_t;
 
-static void build_subspace_shapes(subspace_shape_t shape[FIELD_BITS])
+static void build_subspace_shapes()
 {
     for (unsigned i = 0; i < FIELD_BITS; ++i) {
         shape[i].count = 0;
@@ -161,9 +165,7 @@ static gf16_t subspace_poly_eval(unsigned i, gf16_t x)
  * The upper half of a[] becomes f1, the lower half becomes f0.  We then
  * recurse on both halves.
  */
-static void monomial_to_novel_rec(gf16_t *a,
-                                  unsigned m,
-                                  const subspace_shape_t shape[FIELD_BITS])
+static void monomial_to_novel_rec(gf16_t *a, unsigned m)
 {
     if (m == 0)
         return;
@@ -182,8 +184,8 @@ static void monomial_to_novel_rec(gf16_t *a,
         }
     }
 
-    monomial_to_novel_rec(a,     m - 1, shape);
-    monomial_to_novel_rec(a + h, m - 1, shape);
+    monomial_to_novel_rec(a,     m - 1);
+    monomial_to_novel_rec(a + h, m - 1);
 }
 
 #endif
@@ -203,10 +205,7 @@ static void monomial_to_novel_rec(gf16_t *a,
  * in ascending t order.  Because forward C recurses after division, C^T
  * recurses first and applies the transposed division afterward.
  */
-static void monomial_to_novel_transpose_rec(
-    gf16_t *a,
-    unsigned m,
-    const subspace_shape_t shape[FIELD_BITS])
+static void monomial_to_novel_transpose_rec(gf16_t *a, unsigned m)
 {
     if (m == 0)
         return;
@@ -214,8 +213,8 @@ static void monomial_to_novel_transpose_rec(
     const unsigned i = m - 1;
     const uint32_t h = 1u << i;
 
-    monomial_to_novel_transpose_rec(a,     m - 1, shape);
-    monomial_to_novel_transpose_rec(a + h, m - 1, shape);
+    monomial_to_novel_transpose_rec(a,     m - 1);
+    monomial_to_novel_transpose_rec(a + h, m - 1);
 
     for (uint32_t t = 0; t < h; ++t) {
         gf16_t c = a[h + t];
@@ -243,10 +242,7 @@ static void monomial_to_novel_transpose_rec(
  *   L = f0 + c*f1
  *   R = L  + f1
  */
-static void additive_fft(gf16_t *a,
-                         unsigned m,
-                         gf16_t alpha,
-                         const gf16_t beta[FIELD_BITS])
+static void additive_fft(gf16_t *a, unsigned m, gf16_t alpha)
 {
     if (m == 0)
         return;
@@ -263,8 +259,8 @@ static void additive_fft(gf16_t *a,
         a[h + t] = left ^ f1;
     }
 
-    additive_fft(a,     m - 1, alpha,           beta);
-    additive_fft(a + h, m - 1, alpha ^ beta[i], beta);
+    additive_fft(a,     m - 1, alpha);
+    additive_fft(a + h, m - 1, alpha ^ beta[i]);
 }
 
 #endif
@@ -279,10 +275,7 @@ static void additive_fft(gf16_t *a,
  *   f0' = L' + R'
  *   f1' = c*(L'+R') + R'.
  */
-static void additive_fft_transpose(gf16_t *a,
-                                   unsigned m,
-                                   gf16_t alpha,
-                                   const gf16_t beta[FIELD_BITS])
+static void additive_fft_transpose(gf16_t *a, unsigned m, gf16_t alpha)
 {
     if (m == 0)
         return;
@@ -291,8 +284,8 @@ static void additive_fft_transpose(gf16_t *a,
     const uint32_t h = 1u << i;
 
     /* Reverse the forward recursion first. */
-    additive_fft_transpose(a,     m - 1, alpha,           beta);
-    additive_fft_transpose(a + h, m - 1, alpha ^ beta[i], beta);
+    additive_fft_transpose(a,     m - 1, alpha);
+    additive_fft_transpose(a + h, m - 1, alpha ^ beta[i]);
 
     const gf16_t c = subspace_poly_eval(i, alpha);
 
@@ -306,10 +299,6 @@ static void additive_fft_transpose(gf16_t *a,
     }
 }
 
-static gf16_t beta[FIELD_BITS];
-static subspace_shape_t shape[FIELD_BITS];
-static gf16_t node[FIELD_ORDER];
-
 /* ------------------------------------------------------------------------- */
 /* Fast V and V^T in external polynomial-basis field-element ordering        */
 /* ------------------------------------------------------------------------- */
@@ -320,14 +309,14 @@ void gf16_vandermonde_transpose_multiply(const gf16_t a[FIELD_ORDER], gf16_t y[F
     for (uint32_t j = 0; j < FIELD_ORDER; ++j)
         y[j] = a[node[j]];
 
-    additive_fft_transpose(y, FIELD_BITS, 0, beta);
-    monomial_to_novel_transpose_rec(y, FIELD_BITS, shape);
+    additive_fft_transpose(y, FIELD_BITS, 0);
+    monomial_to_novel_transpose_rec(y, FIELD_BITS);
 }
 
 void gf16_vandermonde_transpose_init() {
-    generate_cantor_basis(beta);
-    build_subspace_shapes(shape);
-    build_cantor_permutation(node, beta);
+    generate_cantor_basis();
+    build_subspace_shapes();
+    build_cantor_permutation();
 }
 
 #if GF16_VANDERMONDE_TESTS_INCLUDED
@@ -375,8 +364,8 @@ static void check_selected_outputs(const gf16_t a[FIELD_ORDER],
 static void vandermonde_forward(const gf16_t c[FIELD_ORDER], gf16_t values[FIELD_ORDER]) {
     memcpy(values, c, FIELD_ORDER * sizeof(gf16_t));
 
-    monomial_to_novel_rec(values, FIELD_BITS, shape);
-    additive_fft(values, FIELD_BITS, 0, beta);
+    monomial_to_novel_rec(values, FIELD_BITS);
+    additive_fft(values, FIELD_BITS, 0);
 
     /* values currently indexed by Cantor coordinates; scatter to x labels. */
     gf16_t *tmp = malloc(FIELD_ORDER * sizeof(gf16_t));
