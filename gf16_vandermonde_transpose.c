@@ -13,6 +13,10 @@
 #define RECURSIVE_AFFT 0
 #endif
 
+#ifndef SUBSPACE_POLY_LUT
+#define SUBSPACE_POLY_LUT 0
+#endif
+
 typedef struct {
     unsigned count;
     uint32_t exponent[FIELD_BITS];
@@ -24,6 +28,9 @@ static gf16_t node[FIELD_ORDER];
 #if RECURSIVE_AFFT || GF16_VANDERMONDE_TESTS_INCLUDED
 static subspace_shape_t shape[FIELD_BITS];
 #endif
+
+static gf16_t subspace_poly_eval_lo[16][256];
+static gf16_t subspace_poly_eval_hi[16][256];
 
 /*
  * Full-field transpose Vandermonde example over
@@ -149,6 +156,45 @@ static void build_subspace_shapes()
 }
 #endif
 
+#if SUBSPACE_POLY_LUT
+
+// Faster version of subspace_poly_eval() using a split lookup table.
+//
+// This works because A(x) = x^2 + x is linear in fields of characteristic 2:
+//
+//  A(x + y) = (x + y)^2 + (x + y)
+//           = x^2 + 2xy + y^2 + x + y      (note 2xy vanishes in GF(2))
+//           = x^2 + x + y^2 + y
+//           = A(x) + A(y)
+//
+// Note: unlike the original implementation, this one requires i < 16.
+static gf16_t subspace_poly_eval(unsigned i, gf16_t x)
+{
+    return
+        subspace_poly_eval_lo[i][x & 0xff] ^
+        subspace_poly_eval_hi[i][x >> 8];
+}
+
+static void build_subspace_poly_eval_tables(void)
+{
+    for (int b = 0; b < 256; ++b) {
+        subspace_poly_eval_lo[0][b] = b;
+        subspace_poly_eval_hi[0][b] = b << 8;
+    }
+
+    for (int i = 1; i < 16; ++i) {
+        for (int b = 0; b < 256; ++b) {
+            gf16_t x_lo = subspace_poly_eval_lo[i - 1][b];
+            subspace_poly_eval_lo[i][b] = gf16_sqr(x_lo) ^ x_lo;
+
+            gf16_t x_hi = subspace_poly_eval_hi[i - 1][b];
+            subspace_poly_eval_hi[i][b] = gf16_sqr(x_hi) ^ x_hi;
+        }
+    }
+}
+
+#else  // !SUBSPACE_POLY_LUT
+
 /* Evaluate s_i(x) = A^i(x), where A(x)=x^2+x. */
 static gf16_t subspace_poly_eval(unsigned i, gf16_t x)
 {
@@ -156,6 +202,8 @@ static gf16_t subspace_poly_eval(unsigned i, gf16_t x)
         x = gf16_sqr(x) ^ x;
     return x;
 }
+
+#endif
 
 /* ------------------------------------------------------------------------- */
 /* Recursive monomial -> novel basis conversion C                            */
@@ -199,6 +247,7 @@ static void monomial_to_novel_rec(gf16_t *a, unsigned m)
 
 #endif
 
+#if RECURSIVE_AFFT
 /*
  * Transpose C^T.
  *
@@ -510,6 +559,9 @@ void gf16_vandermonde_transpose_init() {
     generate_cantor_basis();
 #if RECURSIVE_AFFT || GF16_VANDERMONDE_TESTS_INCLUDED
     build_subspace_shapes();
+#endif
+#if SUBSPACE_POLY_LUT
+    build_subspace_poly_eval_tables();
 #endif
     build_cantor_permutation();
 
