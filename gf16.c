@@ -1,22 +1,28 @@
 #include "gf16.h"
 
-gf16_t gf16_log[1 << 16];
-gf16_t gf16_exp[2 << 16];
+gf16_t gf16_sqr_lut[1 << 16];
+gf16_t gf16_log_lut[1 << 16];
+gf16_t gf16_exp_lut[2 << 16];
 
 void gf16_init() {
-    gf16_log[0] = (uint16_t) GF16_POLY;
-    gf16_exp[65535] = 1;
+    gf16_log_lut[0] = (uint16_t) GF16_POLY;
+    gf16_exp_lut[65535] = 1;
 
 	uint32_t x = 1;
     for (uint32_t i = 0; i < 65535; ++i) {
-		gf16_exp[i] = x;
-		gf16_log[x] = i;
+		gf16_exp_lut[i] = x;
+		gf16_log_lut[x] = i;
 		x <<= 1;
 		if (x & 65536) x ^= GF16_POLY;
 	}
 
     for (unsigned i = 0; i < 65535; ++i) {
-        gf16_exp[i + 65535] = gf16_exp[i];
+        gf16_exp_lut[i + 65535] = gf16_exp_lut[i];
+    }
+
+    gf16_sqr_lut[0] = 0;
+    for (unsigned i = 1; i < 65536; ++i) {
+        gf16_sqr_lut[i] = gf16_exp_lut[gf16_log_lut[i] * 2];
     }
 }
 
