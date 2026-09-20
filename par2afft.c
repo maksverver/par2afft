@@ -690,8 +690,8 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Block size:      %10lld (%.1f %s)\n", arg_block_size,
             ((double) arg_block_size / (arg_block_size < (1<<20) ? (1<<10) : (1<<20))),
             (arg_block_size < (1<<20) ? "KiB" : "MiB"));
-    fprintf(stderr, "Redundancy:      %10.3f\n",
-        arg_output_blocks > 0 ? (double) arg_input_blocks / arg_output_blocks : 0);
+    fprintf(stderr, "Redundancy:      %10.3f%%\n",
+        arg_input_blocks > 0 ? 100.0 * arg_output_blocks / arg_input_blocks : 0);
 
     // Create main packet. Must be done first to calculate the recovery set id.
     create_main_packet();
