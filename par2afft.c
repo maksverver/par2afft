@@ -548,7 +548,7 @@ static uint64_t calculate_block_count(uint64_t block_size) {
 }
 
 static uint64_t calculate_block_size(uint64_t block_count) {
-    assert(block_count >= input_file_count);
+    assert(block_count >= count_nonempty_files());
     uint64_t lo = 1, hi = 1;
     while (calculate_block_count(4*hi) > block_count) {
         lo = hi + 1;
@@ -637,7 +637,7 @@ int parse_arguments(int argc, char *argv[]) {
         fprintf(stderr, "Invalid input block count: %lld\n", arg_input_blocks);
         return -1;
     } else if (arg_input_blocks < nonempty_files) {
-        fprintf(stderr, "Too few block (%lld) for number of nonempty files (%d)\n",
+        fprintf(stderr, "Too few blocks (%lld) for number of nonempty files (%d)\n",
                 arg_input_blocks, nonempty_files);
         return -1;
     } else {
