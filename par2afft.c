@@ -101,7 +101,8 @@ struct InputFile {
     char    *name;
     uint64_t size;
     int      fd;
-    void    *addr;
+    void    *mapped_addr;
+    size_t   mapped_size;
     uint8_t  md5_16k[MD5_DIGEST_LENGTH];
     uint8_t  id[MD5_DIGEST_LENGTH];  // must be unsigned for compare_input_files()
 };
@@ -109,8 +110,9 @@ struct InputFile {
 struct InputSlice {
     gf16_t      constant;
     const void *addr;
-    size_t      size;
 };
+
+static size_t pagesize;
 
 static struct InputFile input_files[MAX_FILE_COUNT];
 
@@ -134,45 +136,11 @@ static long long arg_block_size     = -1;
 static long long arg_redundancy     = -1;
 static long long arg_output_blocks  = -1;
 
-static const uint8_t zeroes[65536];
-
 static void debug_print_hash(const uint8_t md5[MD5_DIGEST_LENGTH]) {
     for (int i = 0; i < MD5_DIGEST_LENGTH; ++i) {
         fprintf(stderr, "%02x", md5[i]);
     }
     fprintf(stderr, "\n");
-}
-
-static void crc32_slice(uint8_t crc32[CRC32_LENGTH], const void *data, size_t size, size_t padding) {
-    uint32_t crc = crc32_init();
-    crc = crc32_update(crc, data, size);
-    while (padding > sizeof(zeroes)) {
-        crc = crc32_update(crc, zeroes, sizeof(zeroes));
-        padding -= sizeof(zeroes);
-    }
-    if (padding > 0) {
-        crc = crc32_update(crc, zeroes, padding);
-        padding -= sizeof(zeroes);
-    }
-    crc = crc32_finish(crc);
-
-    // Assume we're on a little-endian system
-    memcpy(crc32, &crc, CRC32_LENGTH);
-}
-
-static void md5_slice(uint8_t md5[MD5_DIGEST_LENGTH], const void *data, size_t size, size_t padding) {
-    MD5_CTX md5_ctx;
-    MD5_Init(&md5_ctx);
-    MD5_Update(&md5_ctx, data, size);
-    while (padding > sizeof(zeroes)) {
-        MD5_Update(&md5_ctx, zeroes, sizeof(zeroes));
-        padding -= sizeof(zeroes);
-    }
-    if (padding > 0) {
-        MD5_Update(&md5_ctx, zeroes, padding);
-        padding -= sizeof(zeroes);
-    }
-    MD5_Final(md5, &md5_ctx);
 }
 
 static void show_usage() {
@@ -267,7 +235,7 @@ static int write_file_description_packet(const struct InputFile *input_file) {
     strncpy(packet->body.name, input_file->name, name_len);
     MD5_CTX md5_ctx;
     MD5_Init(&md5_ctx);
-    MD5_Update(&md5_ctx, input_file->addr, input_file->size);
+    MD5_Update(&md5_ctx, input_file->mapped_addr, input_file->size);
     MD5_Final(packet->body.md5, &md5_ctx);
     fill_packet_header(&packet->header, packet_type_filedesc,
             &packet->body, sizeof(struct FileDescriptionPacketBody) + name_len);
@@ -276,10 +244,9 @@ static int write_file_description_packet(const struct InputFile *input_file) {
     return res;
 }
 
-// ifsc == Input File Slice Checksum
 // This writes the IFSC packet and as a side-effect also populates input_slices.
 static int write_ifsc_packet(const struct InputFile *input_file, struct InputSlice **slice_ptr) {
-    const uint8_t *data = input_file->addr;
+    const uint8_t *data = input_file->mapped_addr;
     size_t size = input_file->size;
     uint64_t slices = (size + arg_block_size - 1) / arg_block_size;
 
@@ -292,13 +259,20 @@ static int write_ifsc_packet(const struct InputFile *input_file, struct InputSli
     memcpy(packet->body.file_id, input_file->id, MD5_DIGEST_LENGTH);
     for (uint64_t i = 0; i < slices; ++i) {
         assert(size > 0);
+
+        // Calculate CRC-32 of slice (assume we are on a little endian system so we can just copy)
+        uint32_t crc = crc32(data, arg_block_size);
+        memcpy(packet->body.checksums[i].crc32, &crc, CRC32_LENGTH);
+
+        // Calculate MD5 hash of slice
+        MD5_CTX md5_ctx;
+        MD5_Init(&md5_ctx);
+        MD5_Update(&md5_ctx, data, arg_block_size);
+        MD5_Final(packet->body.checksums[i].md5, &md5_ctx);
+
+        (*slice_ptr)++->addr = data;
+
         size_t slice_size = size < arg_block_size ? size : arg_block_size;
-        size_t padding = arg_block_size - slice_size;
-        crc32_slice(packet->body.checksums[i].crc32, data, slice_size, padding);
-        md5_slice(packet->body.checksums[i].md5, data, slice_size, padding);
-        (*slice_ptr)->addr = data;
-        (*slice_ptr)->size = slice_size;
-        (*slice_ptr)++;
         data += slice_size;
         size -= slice_size;
     }
@@ -361,29 +335,29 @@ static int open_input_file(const char *filename) {
 
     struct stat st;
     if (fstat(fd, &st) != 0) {
-        fprintf(stderr, "Could not stat input file (%s): %s\n", filename, strerror(errno));
+        fprintf(stderr, "Failed to stat input file (%s): %s\n", filename, strerror(errno));
         close(fd);
         return -1;
     }
+    if (!S_ISREG(st.st_mode)) {
+        if (S_ISDIR(st.st_mode)) {
+            fprintf(stderr, "Input file is a directory: %s\n", filename);
+        } else {
+            fprintf(stderr, "Input file not a regular file: %s\n", filename);
+        }
+        close(fd);
+        return -1;
+    }
+
     // Note: size must be 8 bytes since we hash it below
     uint64_t size = st.st_size;
     if (size == 0) {
         fprintf(stderr, "Warning: %s is an empty file!\n", filename);
     }
 
-    void *addr = NULL;
-    if (size > 0) {
-        addr = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (addr == MAP_FAILED) {
-            fprintf(stderr, "Could not mmap input file (%s): %s\n", filename, strerror(errno));
-            close(fd);
-            return -1;
-        }
-    }
     char *name = strdup(filename);
     if (name == NULL) {
         perror("strdup");
-        munmap(addr, size);
         close(fd);
         return -1;
     }
@@ -392,19 +366,60 @@ static int open_input_file(const char *filename) {
     file->name = name;
     file->size = size;
     file->fd   = fd;
-    file->addr = addr;
-
-    /* Calculate MD5 hashes */
-    MD5_CTX md5_ctx;
-    MD5_Init(&md5_ctx);
-    MD5_Update(&md5_ctx, addr, size < 16384 ? size : 16384);
-    MD5_Final(file->md5_16k, &md5_ctx);
-    MD5_Init(&md5_ctx);
-    MD5_Update(&md5_ctx, file->md5_16k, MD5_DIGEST_LENGTH);
-    MD5_Update(&md5_ctx, &size, sizeof(size));
-    MD5_Update(&md5_ctx, name, strlen(name));
-    MD5_Final(file->id, &md5_ctx);
     return 0;
+}
+
+static int mmap_input_files() {
+    assert(arg_block_size > 0 && pagesize > 0);  // should be initialized by now
+    for (int i = 0; i < input_file_count; ++i) {
+        struct InputFile *file = &input_files[i];
+        if (file->size == 0) continue;
+
+        // Round up to slice size, then to page size.
+        size_t size = file->size;
+        if (size % arg_block_size != 0) size += arg_block_size - size % arg_block_size;
+        if (size % pagesize != 0) size += pagesize - size % pagesize;
+
+        // First allocate zero pages that cover each slice completely.
+        void *addr = mmap(NULL, size, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (addr == MAP_FAILED) {
+            fprintf(stderr,
+                "Failed to create zero mapping of length %zu for input file (%s): %s\n",
+                size, file->name, strerror(errno));
+            return -1;
+        }
+        // Then create the file mapping on top, which may not fully cover the last slice.
+        void *new_addr = mmap(addr, file->size, PROT_READ, MAP_PRIVATE | MAP_FIXED, file->fd, 0);
+        if (new_addr == MAP_FAILED || new_addr != addr) {
+            fprintf(stderr, "Failed to mmap input file (%s): %s\n", file->name,
+                new_addr == MAP_FAILED ? strerror(errno) : "invalid address");
+            munmap(addr, size);
+            if (new_addr != MAP_FAILED) munmap(new_addr, file->size);
+            return -1;
+        }
+        file->mapped_addr = addr;
+        file->mapped_size = size;
+    }
+    return 0;
+}
+
+static void calculate_input_file_ids() {
+    for (int i = 0; i < input_file_count; ++i) {
+        struct InputFile *file = &input_files[i];
+
+        // Calculate MD5 of the first 16KiB of the file.
+        MD5_CTX md5_ctx;
+        MD5_Init(&md5_ctx);
+        MD5_Update(&md5_ctx, file->mapped_addr, file->size < 16384 ? file->size : 16384);
+        MD5_Final(file->md5_16k, &md5_ctx);
+
+        // Calculate file ID as MD5 has of md5_16k, size, and name.
+        MD5_Init(&md5_ctx);
+        MD5_Update(&md5_ctx, file->md5_16k, MD5_DIGEST_LENGTH);
+        MD5_Update(&md5_ctx, &file->size, sizeof(file->size));
+        MD5_Update(&md5_ctx, file->name, strlen(file->name));
+        MD5_Final(file->id, &md5_ctx);
+    }
 }
 
 static int reserve_output_slices(int slice_count) {
@@ -465,19 +480,8 @@ static void generate_recovery_data() {
         }
         for (int i = 0; i < arg_input_blocks; ++i) {
             // Load the j-th element from the i-th input block.
-            // This is slightly tricky because the end of the file may occur
-            // in the middle of a slice.
             const struct InputSlice *s = &input_blocks[i];
-            if (sizeof(gf16_t) * (j + 1) <= s->size) {
-                a[s->constant] = ((gf16_t*) s->addr)[j];
-            } else if (sizeof(gf16_t) * j >= s->size) {
-                a[s->constant] = 0;  // zero pad to fill slice
-            } else {
-                // One byte left in the file, the other zero-padded. Since we
-                // use little endian encoding, load just the one byte.
-                assert(2*j + 1 == s->size);
-                a[s->constant] = ((uint8_t*) s->addr)[2*j];
-            }
+            a[s->constant] = ((gf16_t*) s->addr)[j];
         }
         gf16_vandermonde_transpose_multiply(a, y);
         for (int i = 0; i < arg_output_blocks; ++i) {
@@ -688,11 +692,33 @@ int parse_arguments(int argc, char *argv[]) {
     return 0;
 }
 
+int init_pagesize() {
+    long res = sysconf(_SC_PAGESIZE);
+    if (res == -1) {
+        perror("sysconf");
+        return -1;
+    }
+    if (res < 64) {
+        fprintf(stderr, "Invalid page size: %ld\n", res);
+        return -1;
+    }
+    pagesize = res;
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
     int exit_status = 0;
 
+    if (init_pagesize() != 0) goto fail;
+
     if (parse_arguments(argc, argv) != 0) goto fail;
 
+    if (mmap_input_files() != 0) {
+        fprintf(stderr, "Failed to mmap input files.\n");
+        goto fail;
+    }
+
+    calculate_input_file_ids();
     sort_input_files_by_id();
 
     // Print a brief summary of what we're about to do.
