@@ -188,7 +188,6 @@ static void fill_packet_header(
 
     MD5_CTX md5_ctx;
     MD5_Init(&md5_ctx);
-    // This assumes the body starts immediately after the header.
     MD5_Update(&md5_ctx, &header->recovery_set_id,
             sizeof(struct PacketHeader) - offsetof(struct PacketHeader, recovery_set_id));
     MD5_Update(&md5_ctx, body_data, body_length);
