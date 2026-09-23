@@ -7,10 +7,9 @@
 
 #include <assert.h>
 #include <stdint.h>
-#include <stdio.h>  // for printf() debugging
 
-#define FIELD_BITS 16
-#define FIELD_ORDER (1 << FIELD_BITS)
+#define FIELD_BITS GF16_BITS
+#define FIELD_ORDER GF16_ORDER
 
 #ifndef ITERATIVE_AFFT
 #define ITERATIVE_AFFT 1
@@ -37,8 +36,13 @@ static gf16_t beta_prefix[FIELD_BITS + 2];
 static subspace_shape_t shape[FIELD_BITS];
 #endif
 
+#if SUBSPACE_POLY_LUT
 static gf16_t subspace_poly_eval_lo[16][256];
 static gf16_t subspace_poly_eval_hi[16][256];
+#endif
+
+static gf16_t subspace_poly_for_afft[FIELD_ORDER];
+static const gf16_t *subspace_poly_by_level[FIELD_BITS];
 
 /*
  * Full-field transpose Vandermonde example over
@@ -217,6 +221,24 @@ static gf16_t subspace_poly_eval(unsigned i, gf16_t x)
 }
 
 #endif
+
+static void build_subspace_poly_for_afft(void) {
+    gf16_t *p = subspace_poly_for_afft;
+    for (int i = 0; i < FIELD_BITS; ++i) {
+        subspace_poly_by_level[i] = p;
+        const int block_count = FIELD_ORDER >> (i + 1);
+        gf16_t alpha = 0;
+        for (int block_index = 0; block_index < block_count; ++block_index) {
+            gf16_t c = subspace_poly_eval(i, alpha);
+            gf16_t log_c = c == 0 ? 65535 : gf16_log(c);
+            *p++ = log_c;
+
+            // Invariant: block_alpha is the XOR sum of beta[j] for all bits j set in block_index.
+            const unsigned z = __builtin_ctz(block_index + 1);
+            alpha ^= beta_prefix[i + z + 2] ^ beta_prefix[i + 1];
+        }
+    }
+}
 
 /* ------------------------------------------------------------------------- */
 /* Recursive monomial -> novel basis conversion C                            */
@@ -578,32 +600,25 @@ static void additive_fft_transpose_rec(gf16_t *a, unsigned m, gf16_t alpha)
 
 __attribute__((always_inline))
 static inline void additive_fft_transpose_level_i(gf16_t *a, const int i) {
-    const uint32_t alpha = 0;
-    const uint32_t n = 1u << 16;
+    const uint32_t n = FIELD_ORDER;
 
     const int h          = 1 << i;
     const int block_size = 2 << i;
 
-    // This can also be inlined in the loop below, but apparently
-    // it's faster to to do this separately?
-    // Check if that's still true after I precomputed the `c` table
+    // This can also be inlined in the loop below, but doing it separately can
+    // be optimized better by the compiler.
     for (gf16_t *block = a; block < a + n; block += block_size) {
         for (uint32_t t = 0; t < h; ++t)
             block[t] ^= block[h + t];
     }
 
-    gf16_t block_alpha = alpha;
-    uint32_t block_index = 0;
+    const gf16_t *p = subspace_poly_by_level[i];
     for (gf16_t *block = a; block < a + n; block += block_size) {
-
-        const gf16_t c = i == 0 ? block_alpha : subspace_poly_eval(i, block_alpha);
-
-        for (uint32_t t = 0; t < h; ++t)
-            block[h + t] ^= gf16_mul(c, block[t]);
-
-        // Invariant: block_alpha is the XOR sum of beta[j] for all bits j set in block_index.
-        const unsigned z = __builtin_ctz(++block_index);
-        block_alpha ^= beta_prefix[i + z + 2] ^ beta_prefix[i + 1];
+        const gf16_t log_c = *p++;
+        if (log_c != 65535) {
+            for (uint32_t t = 0; t < h; ++t)
+                block[h + t] ^= gf16_mul_log(block[t], log_c);
+        }
     }
 }
 
@@ -651,6 +666,7 @@ void gf16_vandermonde_transpose_init() {
 #if SUBSPACE_POLY_LUT
     build_subspace_poly_eval_tables();
 #endif
+    build_subspace_poly_for_afft();
     build_cantor_permutation();
 
     /* Print out shape table contents for manual unrolling.
