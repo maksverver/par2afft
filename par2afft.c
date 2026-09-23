@@ -654,7 +654,8 @@ int parse_arguments(int argc, char *argv[]) {
 
     long long calculated_block_count = calculate_block_count(arg_block_size);
     if (calculated_block_count != arg_input_blocks) {
-        fprintf(stderr, "Warning: calculated block count (%lld) differs from requested block count (%lld)\n"
+        fprintf(stderr,
+                "Note: calculated block count (%lld) differs from requested block count (%lld).\n"
                 "This can happen due to rounding when calculating the block size.\n",
                 (long long) calculated_block_count, arg_input_blocks);
         arg_input_blocks = calculated_block_count;
